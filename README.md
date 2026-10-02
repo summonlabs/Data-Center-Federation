@@ -404,6 +404,37 @@ All 79 cases and all 16899 checks pass in both configurations. Release on the
 same machine with GCC 14.2.0 and with Clang 19.1.1 (MinGW-w64 UCRT) also builds
 under the full warning set with no diagnostics and passes all 79 cases.
 
+### Continuous integration
+
+The workflow in `.github/workflows/ci.yml` runs the same suites on every push and on
+every release tag. Every job below passed on the commit this release contains:
+
+| job | toolchain | configuration |
+| --- | --- | --- |
+| Windows | MSVC 14.44 (Visual Studio 2022) | Debug and Release |
+| Ubuntu 24.04 | g++ 13.3.0 | Debug and Release |
+| Ubuntu 24.04 | clang 18.1.3 | Debug and Release |
+| Ubuntu 24.04 | g++ 13.3.0, AddressSanitizer + UndefinedBehaviorSanitizer | RelWithDebInfo |
+| Ubuntu 24.04 | clang 18.1.3, AddressSanitizer + UndefinedBehaviorSanitizer | RelWithDebInfo |
+| Ubuntu 24.04 | install, package, out-of-tree consumer, installed command line tool | Release |
+| Ubuntu 24.04 | fresh clone of the remote tag | Release |
+
+The sanitizer jobs build and link with `-fsanitize=address,undefined
+-fno-sanitize-recover=all`, so an undefined behaviour finding fails the run instead of
+being logged. There is no `timeout-minutes` anywhere in the workflow and no timeout
+in CTest.
+
+Two defects in this repository were found by those jobs rather than by reading
+the code, and both are fixed here:
+
+- the connectivity report on the session teardown path dereferenced a pointer
+  into a snapshot returned by value, which had already been destroyed. A normal
+  build read the old bytes and carried on; the sanitizer builds reported it and
+  stopped, which is why a partition appeared to be ignored;
+- the runtime cleared its compaction request before the compaction ran, so a
+  concurrent drain could observe an idle runtime and report a completion that
+  had not happened yet.
+
 What the suites actually do:
 
 - @unit_foundation@: identifiers, checked arithmetic, version windows, SHA-256
@@ -483,10 +514,13 @@ left for a reader to discover:
 
 - **Windows x64 with MSVC** is the configuration that was built, tested,
   installed, consumed and benchmarked on this machine, in Debug and Release.
-- **POSIX** code paths are implemented for Linux and macOS, and the CI workflow
-  builds and tests them with GCC and Clang in Debug and Release, with sanitizer
-  jobs. They were **not** built or run on the machine that produced this release,
-  and nothing here claims otherwise.
+- **Linux** is built and tested by the workflow above with GCC 13.3.0 and
+  Clang 18.1.3 in Debug and Release and under AddressSanitizer with
+  UndefinedBehaviorSanitizer, and the package is installed and consumed there.
+  The machine that produced this release has no Linux toolchain, so the Linux
+  results come from the workflow rather than from that machine.
+- **macOS** code paths are implemented but are not exercised by the workflow and
+  were not built or run here. Nothing in this repository claims a macOS result.
 - Windows long-path handling is real but narrow: the store creates its own
   directories and opens, sizes, lists, removes and atomically replaces its own
   files through the platform with the long-path prefix applied, and a store root
@@ -503,8 +537,8 @@ left for a reader to discover:
 - The multiprocess suite runs real processes over the loopback interface on one
   machine. That is genuine multiprocess behaviour; it is not a multi-machine
   deployment test, and no such test is claimed.
-- There are no Windows sanitizer results, because MSVC has no equivalent of ASan
-  plus UBSan for this code. The Linux sanitizer jobs cover it.
+- There are no Windows sanitizer results, because the sanitizer jobs run on
+  Linux only. The Windows jobs cover the warning policy and the suites.
 
 ## Relationship to adjacent boundaries
 
