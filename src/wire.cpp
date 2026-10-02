@@ -568,9 +568,7 @@ Result<std::uint16_t> Connection::local_port() const {
     return make_error(ErrorCode::Closed, "the connection is not open");
   }
   sockaddr_in address{};
-#ifdef _WIN32
   SocketLength length = as_length(sizeof(address));
-#endif
   if (::getsockname(to_native(socket_), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
     return make_error(ErrorCode::Io, socket_error_text("getsockname"));
   }
@@ -678,9 +676,7 @@ Result<std::uint16_t> Listener::port() const {
     return make_error(ErrorCode::Closed, "the listener is not open");
   }
   sockaddr_in address{};
-#ifdef _WIN32
   SocketLength length = as_length(sizeof(address));
-#endif
   if (::getsockname(to_native(socket_), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
     return make_error(ErrorCode::Io, socket_error_text("getsockname"));
   }

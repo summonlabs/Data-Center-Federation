@@ -26,6 +26,25 @@ jobs:
         configuration: [Debug, Release]
     steps:
       - uses: actions/checkout@v5
+      # A hosted Windows runner has Visual Studio installed but no developer
+      # environment, so cl is not on PATH and the Ninja generator has no
+      # compiler to find. The environment that vcvars64.bat produces is exported
+      # to the remaining steps here rather than relying on an action to do it.
+      - name: Enter the MSVC developer environment
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw "vswhere was not found at $vswhere" }
+          $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'no Visual Studio installation with the C++ toolset was found' }
+          $vcvars = Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat'
+          $environment = cmd /c "`"$vcvars`" >nul 2>&1 && set"
+          foreach ($line in $environment) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [System.IO.File]::AppendAllText($env:GITHUB_ENV, "$($Matches[1])=$($Matches[2])`n")
+            }
+          }
+          Write-Output "MSVC environment exported from $install"
       - name: Report the toolchain
         shell: pwsh
         run: |
@@ -33,7 +52,7 @@ jobs:
           ninja --version
           # cl prints its version and then exits with a non-zero code because it
           # was given no input files. The version is what this step is after, so
-          # the code is cleared explicitly here and nowhere else.
+          # the code is cleared here and nowhere else.
           cl 2>&1 | Select-Object -First 1
           $global:LASTEXITCODE = 0
       - name: Configure
