@@ -195,7 +195,11 @@ class SessionRegistry {
 // ordered with every other change rather than kept in a side channel.
 void report_connectivity(dcf::FederationRuntime& runtime, const dcf::SiteId& site,
                          dcf::LinkState link) {
-  const dcf::MembershipRecord* record = runtime.snapshot().find_site(site);
+  // The snapshot is returned by value, so it has to be named: a pointer taken
+  // into the temporary would outlive it, and this runs on the session teardown
+  // path, which is exactly when a partition is being reported.
+  const dcf::FederationState state = runtime.snapshot();
+  const dcf::MembershipRecord* record = state.find_site(site);
   if (record == nullptr || record->link == link) {
     return;
   }

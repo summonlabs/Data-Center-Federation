@@ -216,7 +216,7 @@ class Relay {
       char character = 0;
       const std::ptrdiff_t received = receive_some(client_socket, &character, 1);
       if (received <= 0) {
-        close_native(client_socket);
+        client.close();
         return;
       }
       if (character == '\n') {
@@ -225,7 +225,7 @@ class Relay {
       line.push_back(character);
     }
     if (line.rfind(dcf::wire::kRelayMagic, 0) != 0) {
-      close_native(client_socket);
+      client.close();
       return;
     }
     const std::string token = line.substr(std::strlen(dcf::wire::kRelayMagic));
@@ -234,14 +234,14 @@ class Relay {
       if (blocked_.count(token) > 0) {
         // A blocked site's connection is refused outright, so a reconnect during
         // a partition really does fail rather than being silently ignored.
-        close_native(client_socket);
+        client.close();
         return;
       }
     }
 
     auto upstream = dcf::wire::connect(upstream_);
     if (!upstream) {
-      close_native(client_socket);
+      client.close();
       return;
     }
     const NativeSocket upstream_socket = as_native(upstream.value().release_handle());
@@ -264,19 +264,22 @@ class Relay {
     pump(link->client, link->upstream, link->stopped, stop);
     back.join();
 
-    // Both directions have stopped, so these descriptors are no longer in use by
-    // anything and can be closed here, once.
+    // Both directions have stopped. The link leaves the registry before its
+    // descriptors are closed, so no other thread can shut down a number that has
+    // already been released, and then the descriptors are closed exactly once.
+    {
+      std::lock_guard<std::mutex> guard(mutex_);
+      for (auto iterator = links_.begin(); iterator != links_.end(); ++iterator) {
+        if (iterator->get() == link.get()) {
+          links_.erase(iterator);
+          break;
+        }
+      }
+    }
     close_native(link->client);
     close_native(link->upstream);
     link->client = kNoSocket;
     link->upstream = kNoSocket;
-    std::lock_guard<std::mutex> guard(mutex_);
-    for (auto iterator = links_.begin(); iterator != links_.end(); ++iterator) {
-      if (iterator->get() == link.get()) {
-        links_.erase(iterator);
-        break;
-      }
-    }
   }
 
   void run_control() {
