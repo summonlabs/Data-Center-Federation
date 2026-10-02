@@ -397,10 +397,10 @@ Ninja 1.13.2 and CMake 4.3.2:
 | @unit_store@ | 14 | 32 |
 | @unit_runtime@ | 8 | 30 |
 | @prop_adversarial@ | 6 | 16588 |
-| @cluster_partition@ | 6 | 49 |
-| **total** | **79** | **16899** |
+| @cluster_partition@ | 6 | 51 |
+| **total** | **79** | **16901** |
 
-All 79 cases and all 16899 checks pass in both configurations. Release on the
+All 79 cases and all 16901 checks pass in both configurations. Release on the
 same machine with GCC 14.2.0 and with Clang 19.1.1 (MinGW-w64 UCRT) also builds
 under the full warning set with no diagnostics and passes all 79 cases.
 
