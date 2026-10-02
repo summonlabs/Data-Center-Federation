@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+# The archived runtime synchronises with mutexes and condition variables, so a
+# consumer must link the system thread library. The dependency is declared by
+# the exported target and resolved here, which keeps the consumer free of any
+# platform-specific link flags of its own.
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/DataCenterFederationTargets.cmake")
+
+check_required_components(DataCenterFederation)

@@ -1,0 +1,207 @@
+# Data Center Federation - build, test, sanitizer and packaging validation.
+# Copyright 2026 Summon Software Labs. Apache License 2.0.
+#
+# There is no timeout anywhere in this workflow, by design. A test that never
+# finishes is a defect to be diagnosed from the machine's own evidence, not a
+# job to be killed so that the run can be called green.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows / MSVC ${{ matrix.configuration }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Report the toolchain
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          & cl 2>&1 | Select-Object -First 1
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build
+      - name: Report the build
+        shell: pwsh
+        run: |
+          .\build\dcfctl.exe --help
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --test-dir build --output-on-failure
+      - name: The build must not dirty the worktree
+        shell: pwsh
+        run: |
+          if (git status --porcelain) { git status --porcelain; exit 1 }
+
+  linux:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: 'Ubuntu / GCC Release',   cxx: g++,     configuration: Release }
+          - { label: 'Ubuntu / GCC Debug',     cxx: g++,     configuration: Debug }
+          - { label: 'Ubuntu / Clang Release', cxx: clang++, configuration: Release }
+          - { label: 'Ubuntu / Clang Debug',   cxx: clang++, configuration: Debug }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Report the toolchain
+        run: |
+          set -eu
+          ${{ matrix.cxx }} --version
+          cmake --version
+          ninja --version
+      - name: Configure
+        run: |
+          set -eu
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+      - name: Build
+        run: |
+          set -eu
+          cmake --build build
+      - name: Test
+        run: |
+          set -eu
+          ctest --test-dir build --output-on-failure
+      - name: The build must not dirty the worktree
+        run: |
+          set -eu
+          test -z "$(git status --porcelain)"
+
+  sanitizers:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: 'GCC asan+ubsan',   cxx: g++ }
+          - { label: 'Clang asan+ubsan', cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: |
+          set -eu
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DDCF_ENABLE_ASAN=ON \
+            -DDCF_ENABLE_UBSAN=ON
+      - name: Build
+        run: |
+          set -eu
+          cmake --build build
+      - name: Test under the sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -eu
+          ctest --test-dir build --output-on-failure
+
+  package:
+    name: install, package and downstream consumer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: |
+          set -eu
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: |
+          set -eu
+          cmake --build build
+      - name: Install into a clean prefix
+        run: |
+          set -eu
+          cmake --install build --prefix "$RUNNER_TEMP/prefix"
+      - name: The package must be discoverable under its own name
+        run: |
+          set -eu
+          pkg="$RUNNER_TEMP/prefix/lib/cmake/DataCenterFederation"
+          test -f "$pkg/DataCenterFederationConfig.cmake"
+          test -f "$pkg/DataCenterFederationConfigVersion.cmake"
+          test -f "$pkg/DataCenterFederationTargets.cmake"
+          grep -q 'DataCenterFederation::dcf' "$pkg/DataCenterFederationTargets.cmake"
+          grep -q 'Threads::Threads' "$pkg/DataCenterFederationTargets.cmake"
+          grep -q 'find_dependency(Threads)' "$pkg/DataCenterFederationConfig.cmake"
+      - name: Build the out-of-tree consumer against the installed package
+        run: |
+          set -eu
+          cmake -S examples/consumer -B "$RUNNER_TEMP/consumer-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build "$RUNNER_TEMP/consumer-build"
+      - name: Run the consumer
+        run: |
+          set -eu
+          "$RUNNER_TEMP/consumer-build/dcf-consumer" "$RUNNER_TEMP/consumer-store"
+      - name: Run the installed command line tool
+        run: |
+          set -eu
+          "$RUNNER_TEMP/prefix/bin/dcf-federationd" --help
+          "$RUNNER_TEMP/prefix/bin/dcfctl" --help
+      - name: The install must not dirty the worktree
+        run: |
+          set -eu
+          test -z "$(git status --porcelain)"
+
+  fresh-clone:
+    name: fresh clone of the remote release state
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clone the remote at this ref
+        run: |
+          set -eu
+          git clone --quiet \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "$RUNNER_TEMP/clone"
+          cd "$RUNNER_TEMP/clone"
+          git checkout --quiet "${{ github.ref_name }}"
+          echo "checked out: $(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+      - name: Configure
+        run: |
+          set -eu
+          cmake -S "$RUNNER_TEMP/clone" -B "$RUNNER_TEMP/clone-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: |
+          set -eu
+          cmake --build "$RUNNER_TEMP/clone-build"
+      - name: Test
+        run: |
+          set -eu
+          ctest --test-dir "$RUNNER_TEMP/clone-build" --output-on-failure
+      - name: Install and run the downstream consumer
+        run: |
+          set -eu
+          cmake --install "$RUNNER_TEMP/clone-build" --prefix "$RUNNER_TEMP/clone-prefix"
+          cmake -S "$RUNNER_TEMP/clone/examples/consumer" -B "$RUNNER_TEMP/clone-consumer" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/clone-prefix"
+          cmake --build "$RUNNER_TEMP/clone-consumer"
+          "$RUNNER_TEMP/clone-consumer/dcf-consumer" "$RUNNER_TEMP/clone-consumer-store"

@@ -1,0 +1,37 @@
+# Build trees and generated intermediates. A build directory is never
+# committed; the names below cover the configurations the local checks use.
+/build/
+/build-*/
+/out/
+/install/
+/cases/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+*.obj
+*.o
+*.lib
+*.a
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+# Editor and tooling scratch
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+compile_commands.json
+
+# Runtime scratch produced by the CLI during local experiments
+*.dcfstore
+*.dcfstore.lock
+*.dcfstore.tmp
+scratch/
