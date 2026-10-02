@@ -184,6 +184,70 @@ class LineClient {
   return link.receive(dcf::Limits{});
 }
 
+// A poll that opens a new connection every time turns a slow machine into a
+// connection storm, and the storm then becomes the thing under test. This keeps
+// one session open and reconnects only when the connection is actually gone.
+class Poller {
+ public:
+  explicit Poller(Address endpoint) : endpoint_(std::move(endpoint)) {}
+  Poller(const Poller&) = delete;
+  Poller& operator=(const Poller&) = delete;
+  ~Poller() = default;
+
+  [[nodiscard]] std::string sites() {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      if (!connected_ && !connect()) {
+        settle(50);
+        continue;
+      }
+      dcf::wire::Message request;
+      request.kind = dcf::wire::MessageKind::Query;
+      request.query.kind = dcf::wire::QueryKind::Sites;
+      const auto sent = connection_.send(request, dcf::Limits{});
+      if (!sent) {
+        connected_ = false;
+        continue;
+      }
+      const auto reply = connection_.receive(dcf::Limits{});
+      if (!reply || reply.value().kind != dcf::wire::MessageKind::QueryResult) {
+        connected_ = false;
+        continue;
+      }
+      return reply.value().query_result.body;
+    }
+    return {};
+  }
+
+ private:
+  [[nodiscard]] bool connect() {
+    auto connection = dcf::wire::connect(endpoint_);
+    if (!connection) {
+      return false;
+    }
+    connection_ = std::move(connection).value();
+    connection_.set_receive_deadline_ms(30000);
+    dcf::wire::Message hello;
+    hello.kind = dcf::wire::MessageKind::Hello;
+    hello.hello.peer = dcf::wire::PeerKind::Operator;
+    hello.hello.protocol_major = dcf::kProtocolVersionMajor;
+    hello.hello.protocol_minor = dcf::kProtocolVersionMinor;
+    hello.hello.implementation = "cluster-test-poller";
+    if (!connection_.send(hello, dcf::Limits{})) {
+      return false;
+    }
+    const auto ack = connection_.receive(dcf::Limits{});
+    if (!ack || !ack.value().hello_ack.accepted) {
+      return false;
+    }
+    connected_ = true;
+    return true;
+  }
+
+  Address endpoint_{};
+  dcf::wire::Connection connection_{};
+  bool connected_{false};
+};
+
 [[nodiscard]] dcf::CommandOutcome submit_operator(const Address& endpoint, dcf::CommandPayload payload) {
   dcf::wire::Message message;
   message.kind = dcf::wire::MessageKind::CommandMessage;
@@ -408,12 +472,12 @@ DCF_TEST(cluster, membership_activation_partition_reconnect) {
   DCF_CHECK(relay.read_line().rfind("OK blocked", 0) == 0);
   // The federation notices because the path is gone, not because a flag was set.
   DCF_CHECK(dcf::test::wait_for_marker(cluster.federation_log, "", 1, 0));
+  Poller poller(cluster.federation);
   bool saw_partition = false;
-  for (int attempt = 0; attempt < 400 && !saw_partition; ++attempt) {
-    saw_partition = query_operator(cluster.federation, dcf::wire::QueryKind::Sites, "")
-                        .find("\"state\":\"partitioned\"") != std::string::npos;
+  for (int attempt = 0; attempt < 600 && !saw_partition; ++attempt) {
+    saw_partition = poller.sites().find("\"state\":\"partitioned\"") != std::string::npos;
     if (!saw_partition) {
-      settle(25);
+      settle(100);
     }
   }
   DCF_CHECK(saw_partition);
@@ -592,12 +656,12 @@ DCF_TEST(cluster, a_member_removed_during_a_partition_is_fenced_on_reconnect) {
   DCF_REQUIRE(relay.connected());
   DCF_REQUIRE(relay.send_line(std::string("BLOCK ") + kSiteId));
   DCF_CHECK(relay.read_line().rfind("OK blocked", 0) == 0);
+  Poller poller(cluster.federation);
   bool partitioned_seen = false;
-  for (int attempt = 0; attempt < 400 && !partitioned_seen; ++attempt) {
-    partitioned_seen = query_operator(cluster.federation, dcf::wire::QueryKind::Sites, "")
-                           .find("\"state\":\"partitioned\"") != std::string::npos;
+  for (int attempt = 0; attempt < 600 && !partitioned_seen; ++attempt) {
+    partitioned_seen = poller.sites().find("\"state\":\"partitioned\"") != std::string::npos;
     if (!partitioned_seen) {
-      settle(25);
+      settle(100);
     }
   }
   DCF_CHECK(partitioned_seen);

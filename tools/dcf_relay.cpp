@@ -93,10 +93,16 @@ void shutdown_native(NativeSocket socket) {
 #endif
 }
 
+// One forwarded link. The descriptors live here and are closed exactly once, by
+// the thread that owns them, after both directions have stopped. A partition
+// shuts the link down, which wakes every blocked reader without freeing the
+// descriptor: closing it from another thread while a reader is blocked on it is
+// not safe, and the number can be handed to an unrelated connection.
 struct Link {
   NativeSocket client{kNoSocket};
   NativeSocket upstream{kNoSocket};
   std::string token{};
+  std::atomic<bool> stopped{false};
 };
 
 class Relay {
@@ -142,13 +148,11 @@ class Relay {
     control_listener_.close();
     {
       std::lock_guard<std::mutex> guard(mutex_);
-      for (Link& link : links_) {
-        shutdown_native(link.client);
-        shutdown_native(link.upstream);
-        close_native(link.client);
-        close_native(link.upstream);
+      for (auto& link : links_) {
+        link->stopped.store(true);
+        shutdown_native(link->client);
+        shutdown_native(link->upstream);
       }
-      links_.clear();
     }
     if (control_thread_.joinable()) {
       control_thread_.join();
@@ -156,9 +160,10 @@ class Relay {
   }
 
  private:
-  static void pump(NativeSocket from, NativeSocket to, std::atomic<bool>& stop) {
+  static void pump(NativeSocket from, NativeSocket to, const std::atomic<bool>& link_stopped,
+                   std::atomic<bool>& stop) {
     std::vector<char> buffer(16384);
-    while (!stop.load()) {
+    while (!stop.load() && !link_stopped.load()) {
       const std::ptrdiff_t received = receive_some(from, buffer.data(), buffer.size());
       if (received <= 0) {
         break;
@@ -242,23 +247,31 @@ class Relay {
     const NativeSocket upstream_socket = as_native(upstream.value().release_handle());
     static_cast<void>(client.release_handle());
 
+    auto link = std::make_shared<Link>();
+    link->client = client_socket;
+    link->upstream = upstream_socket;
+    link->token = token;
     {
       std::lock_guard<std::mutex> guard(mutex_);
-      links_.push_back(Link{client_socket, upstream_socket, token});
+      links_.push_back(link);
     }
 
     std::atomic<bool> stop{false};
-    std::thread back([&stop, client_socket, upstream_socket] {
-      pump(upstream_socket, client_socket, stop);
+    std::thread back([link, &stop] {
+      pump(link->upstream, link->client, link->stopped, stop);
     });
-    pump(client_socket, upstream_socket, stop);
+    pump(link->client, link->upstream, link->stopped, stop);
     back.join();
 
-    close_native(client_socket);
-    close_native(upstream_socket);
+    // Both directions have stopped, so these descriptors are no longer in use by
+    // anything and can be closed here, once.
+    close_native(link->client);
+    close_native(link->upstream);
+    link->client = kNoSocket;
+    link->upstream = kNoSocket;
     std::lock_guard<std::mutex> guard(mutex_);
     for (auto iterator = links_.begin(); iterator != links_.end(); ++iterator) {
-      if (iterator->client == client_socket) {
+      if (iterator->get() == link.get()) {
         links_.erase(iterator);
         break;
       }
@@ -328,16 +341,13 @@ class Relay {
     {
       std::lock_guard<std::mutex> guard(mutex_);
       blocked_.insert(token);
-      for (Link& link : links_) {
-        if (link.token == token) {
-          // Closing a link is what a partition looks like from both sides: the
-          // sockets are gone and nothing further is delivered.
-          shutdown_native(link.client);
-          shutdown_native(link.upstream);
-          close_native(link.client);
-          close_native(link.upstream);
-          link.client = kNoSocket;
-          link.upstream = kNoSocket;
+      for (auto& link : links_) {
+        if (link->token == token) {
+          // A partition is the flow stopping in both directions. The descriptors
+          // stay owned by the thread reading them until it has stopped.
+          link->stopped.store(true);
+          shutdown_native(link->client);
+          shutdown_native(link->upstream);
         }
       }
     }
@@ -397,7 +407,7 @@ class Relay {
   dcf::wire::Listener control_listener_{};
   std::thread control_thread_{};
   std::mutex mutex_{};
-  std::vector<Link> links_{};
+  std::vector<std::shared_ptr<Link>> links_{};
   std::set<std::string> blocked_{};
   std::atomic<bool> quitting_{false};
 };

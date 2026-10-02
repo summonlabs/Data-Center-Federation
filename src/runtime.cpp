@@ -227,7 +227,10 @@ void FederationRuntime::run() {
                         [this] { return stopping_ || !queue_.empty() || compact_requested_; });
       if (queue_.empty()) {
         if (compact_requested_) {
-          compact_requested_ = false;
+          // The request is cleared only once the work is finished. Clearing it
+          // first would let a concurrent drain observe an idle runtime while the
+          // compaction was still in flight, and report a completion that had not
+          // happened yet.
           guard.unlock();
           const auto compacted = store_->compact(engine_.state());
           {
@@ -238,7 +241,8 @@ void FederationRuntime::run() {
             entries_since_compaction_ = 0;
           }
           std::lock_guard<std::mutex> empty_guard(queue_mutex_);
-          if (queue_.empty() && in_flight_ == 0 && !compact_requested_) {
+          compact_requested_ = false;
+          if (queue_.empty() && in_flight_ == 0) {
             queue_empty_.notify_all();
           }
           continue;

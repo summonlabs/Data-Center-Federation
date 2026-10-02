@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -487,7 +488,8 @@ int main(int argc, char** argv) {
 
   std::atomic<std::size_t> active{0};
   SessionRegistry registry;
-  std::vector<std::thread> sessions;
+  std::mutex sessions_mutex;
+  std::condition_variable sessions_idle;
   for (;;) {
     auto connection = bound.accept();
     if (!connection) {
@@ -506,16 +508,25 @@ int main(int argc, char** argv) {
     }
     active.fetch_add(1);
     auto session = std::make_shared<Session>(std::move(connection).value());
-    sessions.emplace_back([session = std::move(session), &service, &options, &registry,
-                           &active]() mutable {
+    // A session thread is detached rather than accumulated. Holding a joinable
+    // thread object per connection would grow without bound in a daemon that
+    // runs for a long time, and the shutdown path only needs the counter.
+    std::thread([session = std::move(session), &service, &options, &registry, &active,
+                 &sessions_mutex, &sessions_idle]() mutable {
       serve(std::move(session), *service, options, registry, active);
-    });
+      {
+        std::lock_guard<std::mutex> guard(sessions_mutex);
+        sessions_idle.notify_all();
+      }
+    }).detach();
   }
 
-  for (std::thread& session : sessions) {
-    if (session.joinable()) {
-      session.join();
-    }
+  {
+    std::unique_lock<std::mutex> guard(sessions_mutex);
+    // Bounded: a session that does not notice the closed listener must not keep
+    // the process alive indefinitely.
+    static_cast<void>(sessions_idle.wait_for(guard, std::chrono::seconds(10),
+                                             [&active] { return active.load() == 0; }));
   }
   static_cast<void>(service->shutdown());
   return 0;
