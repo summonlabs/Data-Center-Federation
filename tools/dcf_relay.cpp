@@ -247,6 +247,7 @@ class Relay {
     const NativeSocket upstream_socket = as_native(upstream.value().release_handle());
     static_cast<void>(client.release_handle());
 
+    std::cout << "link " << token << " established" << std::endl;
     auto link = std::make_shared<Link>();
     link->client = client_socket;
     link->upstream = upstream_socket;
@@ -337,6 +338,11 @@ class Relay {
     }
   }
 
+  [[nodiscard]] std::size_t link_count() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return links_.size();
+  }
+
   void block(const std::string& token) {
     {
       std::lock_guard<std::mutex> guard(mutex_);
@@ -351,7 +357,7 @@ class Relay {
         }
       }
     }
-    std::cout << "partition " << token << std::endl;
+    std::cout << "partition " << token << " (links " << link_count() << ")" << std::endl;
   }
 
   void allow(const std::string& token) {

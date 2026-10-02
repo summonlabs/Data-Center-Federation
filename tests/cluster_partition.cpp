@@ -392,6 +392,45 @@ struct Cluster {
     return port_after(site_log, "control");
   }
 
+  // The last lines a program wrote. When something stops answering, this is the
+  // only place its own account of why exists, and a sanitizer report appears
+  // here rather than in the job log.
+  [[nodiscard]] std::vector<std::string> tail_of(const std::string& path,
+                                                 std::size_t lines) const {
+    const std::string text = dcf::test::read_text_file(path);
+    std::vector<std::string> all;
+    std::size_t offset = 0;
+    while (offset <= text.size() && !text.empty()) {
+      const std::size_t end = text.find('\n', offset);
+      const std::size_t stop = end == std::string::npos ? text.size() : end;
+      all.push_back(text.substr(offset, stop - offset));
+      if (end == std::string::npos) {
+        break;
+      }
+      offset = end + 1;
+    }
+    if (all.size() <= lines) {
+      return all;
+    }
+    return std::vector<std::string>(all.end() - static_cast<std::ptrdiff_t>(lines), all.end());
+  }
+
+  [[nodiscard]] bool daemons_alive() const {
+    return federation_process.running() && relay_process.running() && site_process.running();
+  }
+
+  void note_logs(dcf::test::Context& context, const std::string& label) const {
+    context.note(label);
+    const auto dump = [&context](const char* name, const std::vector<std::string>& lines) {
+      for (const std::string& line : lines) {
+        context.note(std::string("  ") + name + ": " + line);
+      }
+    };
+    dump("federation", tail_of(federation_log, 25));
+    dump("relay", tail_of(relay_log, 15));
+    dump("site", tail_of(site_log, 25));
+  }
+
   void stop_all() {
     site_process.kill();
     relay_process.kill();
@@ -481,6 +520,14 @@ DCF_TEST(cluster, membership_activation_partition_reconnect) {
     }
   }
   DCF_CHECK(saw_partition);
+  DCF_CHECK(cluster.daemons_alive());
+  if (!saw_partition) {
+    cluster.note_logs(dcf_ctx, "the partition was never observed; daemon output follows");
+    if (relay.connected()) {
+      static_cast<void>(relay.send_line("STATUS"));
+      dcf_ctx.note("relay status: " + relay.read_line());
+    }
+  }
 
   const std::string partitioned =
       query_operator(cluster.federation, dcf::wire::QueryKind::Sites, "");
@@ -665,6 +712,14 @@ DCF_TEST(cluster, a_member_removed_during_a_partition_is_fenced_on_reconnect) {
     }
   }
   DCF_CHECK(partitioned_seen);
+  DCF_CHECK(cluster.daemons_alive());
+  if (!partitioned_seen) {
+    cluster.note_logs(dcf_ctx, "the partition was never observed; daemon output follows");
+    if (relay.connected()) {
+      static_cast<void>(relay.send_line("STATUS"));
+      dcf_ctx.note("relay status: " + relay.read_line());
+    }
+  }
 
   // The member is removed while it cannot hear anything about it.
   DCF_CHECK_EQ(submit_operator(cluster.federation,

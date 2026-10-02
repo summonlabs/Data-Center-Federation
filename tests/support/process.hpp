@@ -37,8 +37,11 @@ class ChildProcess {
   void reset() noexcept;
 
   std::int64_t id_{0};
-  bool reaped_{false};
-  int status_{-1};
+  // Observation and status are written even from the const liveness query: a
+  // child that has been reaped must never be signalled again, because its
+  // identifier may already belong to another process.
+  mutable bool reaped_{false};
+  mutable int status_{-1};
   void* handle_{nullptr};
 };
 

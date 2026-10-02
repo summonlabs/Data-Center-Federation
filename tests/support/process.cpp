@@ -211,7 +211,14 @@ bool ChildProcess::running() const {
 #else
   int status = 0;
   const pid_t result = waitpid(static_cast<pid_t>(id_), &status, WNOHANG);
-  return result == 0;
+  if (result == 0) {
+    return true;
+  }
+  // The child has exited and has now been reaped, so it must not be signalled or
+  // waited for again.
+  reaped_ = true;
+  status_ = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  return false;
 #endif
 }
 
