@@ -9,11 +9,17 @@
 #include <thread>
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
-#  include <spawn.h>
+#  include <fcntl.h>
 #  include <signal.h>
+#  include <spawn.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
 extern char** environ;

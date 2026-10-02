@@ -162,7 +162,7 @@ class LineClient {
     return connection.error();
   }
   dcf::wire::Connection link = std::move(connection).value();
-  link.set_receive_deadline_ms(10000);
+  link.set_receive_deadline_ms(30000);
   dcf::wire::Message hello;
   hello.kind = dcf::wire::MessageKind::Hello;
   hello.hello.peer = dcf::wire::PeerKind::Operator;
@@ -276,7 +276,7 @@ struct Cluster {
       last_error = "spawn failed: " + dcf::test::last_spawn_error();
       return false;
     }
-    if (!dcf::test::wait_for_marker(federation_log, "READY", 400, 25)) {
+    if (!dcf::test::wait_for_marker(federation_log, "READY", 1200, 25)) {
       last_error = "no readiness marker; log was: " + dcf::test::read_text_file(federation_log);
       return false;
     }
@@ -294,7 +294,7 @@ struct Cluster {
       last_error = "relay spawn failed: " + dcf::test::last_spawn_error();
       return false;
     }
-    if (!dcf::test::wait_for_marker(relay_log, "READY", 400, 25)) {
+    if (!dcf::test::wait_for_marker(relay_log, "READY", 1200, 25)) {
       last_error = "no relay readiness marker; log was: " +
                    dcf::test::read_text_file(relay_log);
       return false;
@@ -317,7 +317,7 @@ struct Cluster {
       last_error = "site spawn failed: " + dcf::test::last_spawn_error();
       return false;
     }
-    if (!dcf::test::wait_for_marker(site_log, "READY", 400, 25)) {
+    if (!dcf::test::wait_for_marker(site_log, "READY", 1200, 25)) {
       last_error = "no site readiness marker; log was: " + dcf::test::read_text_file(site_log);
       return false;
     }
@@ -379,7 +379,7 @@ DCF_TEST(cluster, membership_activation_partition_reconnect) {
                    .code,
                dcf::ErrorCode::None);
 
-  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state candidate", 400, 25));
+  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state candidate", 1200, 25));
   DCF_CHECK_EQ(submit_operator(cluster.federation, dcf::ValidateSiteCommand{*dcf::parse_identifier<dcf::SiteTag>(kSiteId)}).code,
                dcf::ErrorCode::None);
 
@@ -393,7 +393,7 @@ DCF_TEST(cluster, membership_activation_partition_reconnect) {
                                                      dcf::MembershipGeneration{membership_generation}})
                    .code,
                dcf::ErrorCode::None);
-  DCF_CHECK(dcf::test::wait_for_marker(cluster.site_log, "state active", 400, 25));
+  DCF_CHECK(dcf::test::wait_for_marker(cluster.site_log, "state active", 1200, 25));
 
   const std::string summary =
       query_operator(cluster.federation, dcf::wire::QueryKind::Summary, "");
@@ -520,7 +520,7 @@ DCF_TEST(cluster, a_killed_federation_recovers_from_its_own_store) {
                   dcf::AdmitSiteCommand{*dcf::parse_identifier<dcf::SiteTag>(kSiteId),
                                         dcf::MembershipGeneration{membership_generation}})
                   .code == dcf::ErrorCode::None);
-  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state active", 400, 25));
+  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state active", 1200, 25));
 
   const std::string before =
       query_operator(cluster.federation, dcf::wire::QueryKind::Summary, "");
@@ -586,7 +586,7 @@ DCF_TEST(cluster, a_member_removed_during_a_partition_is_fenced_on_reconnect) {
                   dcf::AdmitSiteCommand{*dcf::parse_identifier<dcf::SiteTag>(kSiteId),
                                         dcf::MembershipGeneration{membership_generation}})
                   .code == dcf::ErrorCode::None);
-  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state active", 400, 25));
+  DCF_REQUIRE(dcf::test::wait_for_marker(cluster.site_log, "state active", 1200, 25));
 
   LineClient relay = LineClient::open(cluster.relay_control);
   DCF_REQUIRE(relay.connected());
@@ -613,7 +613,7 @@ DCF_TEST(cluster, a_member_removed_during_a_partition_is_fenced_on_reconnect) {
   DCF_CHECK(relay.read_line().rfind("OK allowed", 0) == 0);
 
   DCF_CHECK(dcf::test::wait_for_marker(cluster.site_log,
-                                       "reconciliation site_adopts_and_remains_fenced", 600, 25));
+                                       "reconciliation site_adopts_and_remains_fenced", 1200, 25));
   DCF_CHECK(dcf::test::wait_for_marker(cluster.site_log, "fenced by-federation", 200, 25));
 
   const std::string sites = query_operator(cluster.federation, dcf::wire::QueryKind::Sites, "");

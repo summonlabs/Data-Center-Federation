@@ -31,7 +31,11 @@ jobs:
         run: |
           cmake --version
           ninja --version
-          & cl 2>&1 | Select-Object -First 1
+          # cl prints its version and then exits with a non-zero code because it
+          # was given no input files. The version is what this step is after, so
+          # the code is cleared explicitly here and nowhere else.
+          cl 2>&1 | Select-Object -First 1
+          $global:LASTEXITCODE = 0
       - name: Configure
         shell: pwsh
         run: |

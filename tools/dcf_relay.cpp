@@ -9,6 +9,7 @@
 // is being used to test.
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -23,7 +24,12 @@
 #include "dcf/wire.hpp"
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 using NativeSocket = SOCKET;
@@ -49,6 +55,30 @@ void close_native(NativeSocket socket) {
   ::closesocket(socket);
 #else
   ::close(socket);
+#endif
+}
+
+// The relay moves bytes itself rather than through the framed protocol, so it
+// needs these two primitives. POSIX returns ssize_t and Winsock returns int;
+// both are normalised to std::ptrdiff_t, and a count becomes a size only after
+// it is known to be positive.
+constexpr std::size_t kMaxSocketChunk = 1U << 20;
+
+[[nodiscard]] std::ptrdiff_t receive_some(NativeSocket socket, char* data, std::size_t size) {
+  const std::size_t wanted = std::min(size, kMaxSocketChunk);
+#ifdef _WIN32
+  return static_cast<std::ptrdiff_t>(::recv(socket, data, static_cast<int>(wanted), 0));
+#else
+  return static_cast<std::ptrdiff_t>(::recv(socket, data, wanted, 0));
+#endif
+}
+
+[[nodiscard]] std::ptrdiff_t send_some(NativeSocket socket, const char* data, std::size_t size) {
+  const std::size_t wanted = std::min(size, kMaxSocketChunk);
+#ifdef _WIN32
+  return static_cast<std::ptrdiff_t>(::send(socket, data, static_cast<int>(wanted), 0));
+#else
+  return static_cast<std::ptrdiff_t>(::send(socket, data, wanted, MSG_NOSIGNAL));
 #endif
 }
 
@@ -129,25 +159,21 @@ class Relay {
   static void pump(NativeSocket from, NativeSocket to, std::atomic<bool>& stop) {
     std::vector<char> buffer(16384);
     while (!stop.load()) {
-      const int received = ::recv(from, buffer.data(), static_cast<int>(buffer.size()), 0);
+      const std::ptrdiff_t received = receive_some(from, buffer.data(), buffer.size());
       if (received <= 0) {
         break;
       }
-      int sent = 0;
-      while (sent < received) {
-#ifdef _WIN32
-        const int chunk = ::send(to, buffer.data() + sent, received - sent, 0);
-#else
-        const auto chunk = ::send(to, buffer.data() + sent,
-                                  static_cast<std::size_t>(received - sent), MSG_NOSIGNAL);
-#endif
+      const std::size_t total = static_cast<std::size_t>(received);
+      std::size_t sent = 0;
+      while (sent < total) {
+        const std::ptrdiff_t chunk = send_some(to, buffer.data() + sent, total - sent);
         if (chunk <= 0) {
           stop.store(true);
           shutdown_native(to);
           shutdown_native(from);
           return;
         }
-        sent += chunk;
+        sent += static_cast<std::size_t>(chunk);
       }
     }
     stop.store(true);
@@ -183,7 +209,7 @@ class Relay {
     std::string line;
     while (line.size() < 256) {
       char character = 0;
-      const int received = ::recv(client_socket, &character, 1, 0);
+      const std::ptrdiff_t received = receive_some(client_socket, &character, 1);
       if (received <= 0) {
         close_native(client_socket);
         return;
@@ -260,7 +286,7 @@ class Relay {
     std::string pending;
     char buffer[512];
     for (;;) {
-      const int received = ::recv(socket, buffer, sizeof(buffer), 0);
+      const std::ptrdiff_t received = receive_some(socket, buffer, sizeof(buffer));
       if (received <= 0) {
         return;
       }
@@ -286,12 +312,7 @@ class Relay {
           out.push_back('\n');
           std::size_t sent = 0;
           while (sent < out.size()) {
-#ifdef _WIN32
-            const int chunk = ::send(socket, out.data() + sent,
-                                     static_cast<int>(out.size() - sent), 0);
-#else
-            const auto chunk = ::send(socket, out.data() + sent, out.size() - sent, MSG_NOSIGNAL);
-#endif
+            const std::ptrdiff_t chunk = send_some(socket, out.data() + sent, out.size() - sent);
             if (chunk <= 0) {
               return;
             }

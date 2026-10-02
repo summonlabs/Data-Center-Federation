@@ -8,7 +8,12 @@
 #include "record_codec.hpp"
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #else
@@ -65,6 +70,18 @@ void close_socket(NativeSocket socket) { ::close(socket); }
 
 [[nodiscard]] std::uintptr_t to_handle(NativeSocket socket) {
   return static_cast<std::uintptr_t>(socket);
+}
+
+// bind, connect, getsockname and setsockopt all take a length whose type is
+// socklen_t on POSIX and int on Windows.
+#ifdef _WIN32
+using SocketLength = int;
+#else
+using SocketLength = socklen_t;
+#endif
+
+[[nodiscard]] constexpr SocketLength as_length(std::size_t value) noexcept {
+  return static_cast<SocketLength>(value);
 }
 
 constexpr std::uintptr_t kInvalidHandle = static_cast<std::uintptr_t>(~static_cast<std::uintptr_t>(0));
@@ -509,12 +526,13 @@ Result<Message> Connection::receive(const Limits& limits) {
 #ifdef _WIN32
     const DWORD deadline = receive_deadline_ms_;
     ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO,
-                 reinterpret_cast<const char*>(&deadline), sizeof(deadline));
+                 reinterpret_cast<const char*>(&deadline), as_length(sizeof(deadline)));
 #else
     timeval deadline{};
     deadline.tv_sec = static_cast<time_t>(receive_deadline_ms_ / 1000U);
     deadline.tv_usec = static_cast<suseconds_t>((receive_deadline_ms_ % 1000U) * 1000U);
-    ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO, &deadline, sizeof(deadline));
+    ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO, &deadline,
+                 as_length(sizeof(deadline)));
 #endif
   }
 
@@ -551,9 +569,7 @@ Result<std::uint16_t> Connection::local_port() const {
   }
   sockaddr_in address{};
 #ifdef _WIN32
-  int length = sizeof(address);
-#else
-  socklen_t length = sizeof(address);
+  SocketLength length = as_length(sizeof(address));
 #endif
   if (::getsockname(to_native(socket_), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
     return make_error(ErrorCode::Io, socket_error_text("getsockname"));
@@ -596,7 +612,7 @@ Result<Listener> Listener::bind(const Address& address, std::uint16_t backlog) {
   }
   int reuse = 1;
   static_cast<void>(::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR,
-                                 reinterpret_cast<const char*>(&reuse), sizeof(reuse)));
+                                 reinterpret_cast<const char*>(&reuse), as_length(sizeof(reuse))));
 
   sockaddr_in local{};
   local.sin_family = AF_INET;
@@ -607,7 +623,7 @@ Result<Listener> Listener::bind(const Address& address, std::uint16_t backlog) {
                       "host '" + sanitize_for_terminal(address.host) +
                           "' is not an IPv4 address");
   }
-  if (::bind(socket, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0) {
+  if (::bind(socket, reinterpret_cast<sockaddr*>(&local), as_length(sizeof(local))) != 0) {
     const std::string detail = socket_error_text("bind");
     close_socket(socket);
     return make_error(ErrorCode::Io, detail + " for " + address.to_string());
@@ -630,20 +646,17 @@ Result<Connection> Listener::accept() {
 #ifdef _WIN32
     const DWORD deadline = accept_deadline_ms_;
     ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO,
-                 reinterpret_cast<const char*>(&deadline), sizeof(deadline));
+                 reinterpret_cast<const char*>(&deadline), as_length(sizeof(deadline)));
 #else
     timeval deadline{};
     deadline.tv_sec = static_cast<time_t>(accept_deadline_ms_ / 1000U);
     deadline.tv_usec = static_cast<suseconds_t>((accept_deadline_ms_ % 1000U) * 1000U);
-    ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO, &deadline, sizeof(deadline));
+    ::setsockopt(to_native(socket_), SOL_SOCKET, SO_RCVTIMEO, &deadline,
+                 as_length(sizeof(deadline)));
 #endif
   }
   sockaddr_in peer{};
-#ifdef _WIN32
-  int length = sizeof(peer);
-#else
-  socklen_t length = sizeof(peer);
-#endif
+  SocketLength length = as_length(sizeof(peer));
   const NativeSocket accepted =
       ::accept(to_native(socket_), reinterpret_cast<sockaddr*>(&peer), &length);
   if (accepted == kInvalid) {
@@ -655,7 +668,8 @@ Result<Connection> Listener::accept() {
   }
   int no_delay = 1;
   static_cast<void>(::setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY,
-                                 reinterpret_cast<const char*>(&no_delay), sizeof(no_delay)));
+                                 reinterpret_cast<const char*>(&no_delay),
+                                 as_length(sizeof(no_delay))));
   return Connection(to_handle(accepted));
 }
 
@@ -665,9 +679,7 @@ Result<std::uint16_t> Listener::port() const {
   }
   sockaddr_in address{};
 #ifdef _WIN32
-  int length = sizeof(address);
-#else
-  socklen_t length = sizeof(address);
+  SocketLength length = as_length(sizeof(address));
 #endif
   if (::getsockname(to_native(socket_), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
     return make_error(ErrorCode::Io, socket_error_text("getsockname"));
@@ -692,14 +704,15 @@ Result<Connection> connect(const Address& address) {
                       "host '" + sanitize_for_terminal(address.host) +
                           "' is not an IPv4 address");
   }
-  if (::connect(socket, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) != 0) {
+  if (::connect(socket, reinterpret_cast<sockaddr*>(&remote), as_length(sizeof(remote))) != 0) {
     const std::string detail = socket_error_text("connect");
     close_socket(socket);
     return make_error(ErrorCode::Io, detail + " to " + address.to_string());
   }
   int no_delay = 1;
   static_cast<void>(::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY,
-                                 reinterpret_cast<const char*>(&no_delay), sizeof(no_delay)));
+                                 reinterpret_cast<const char*>(&no_delay),
+                                 as_length(sizeof(no_delay))));
   return Connection(to_handle(socket));
 }
 
