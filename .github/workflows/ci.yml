@@ -1,9 +1,5 @@
 # Data Center Federation - build, test, sanitizer and packaging validation.
 # Copyright 2026 Summon Software Labs. Apache License 2.0.
-#
-# There is no timeout anywhere in this workflow, by design. A test that never
-# finishes is a defect to be diagnosed from the machine's own evidence, not a
-# job to be killed so that the run can be called green.
 name: CI
 
 on:
