@@ -110,8 +110,8 @@ serialization and hashing are the same operation.
   generation, and tells it that it remains outside. It is never quietly
   reinstated.
 - A site that claims a generation the federation has never issued is reported as
-  @federation_regression@. The federation does not adopt the claim and does not
-  demote the site; it reports @indeterminate@ and refuses to reconcile
+  `federation_regression`. The federation does not adopt the claim and does not
+  demote the site; it reports `indeterminate` and refuses to reconcile
   automatically, because a site that is ahead is describing authority this
   federation may have lost.
 
@@ -136,7 +136,7 @@ transition is refused by name rather than applied and discovered later.
 
 ## Partition semantics
 
-A partition here is a real event on a real path. @dcf-relay@ forwards bytes
+A partition here is a real event on a real path. `dcf-relay` forwards bytes
 between sites and the federation and can cut one named site off; doing so closes
 that site's connections and refuses new ones, which is what a partition is.
 
@@ -157,7 +157,7 @@ that site's connections and refuses new ones, which is what a partition is.
 - On reconnect the federation compares generations and history digests and
   produces a deterministic outcome. A genuine conflict is never resolved by
   preferring whichever side answered last: it is recorded as
-  @conflict_unresolved@ and stays open until an operator resolves it explicitly,
+  `conflict_unresolved` and stays open until an operator resolves it explicitly,
   naming the authority the resolution is made under.
 
 ## Compatibility
@@ -191,18 +191,18 @@ journal.<first>.dcflog  an append-only segment of framed records
 store.lock              an exclusive advisory lock, released even on a crash
 ```
 
-A journal record is @u32 payload length | u32 CRC-32C | canonical payload@. A
+A journal record is `u32 payload length | u32 CRC-32C | canonical payload`. A
 snapshot is a header, the canonical state, a CRC and the canonical digest.
 
-**The commit boundary is the flush.** @commit()@ returns only after the bytes
-have reached storage: @fsync@ on POSIX, @FlushFileBuffers@ on Windows. The publish
+**The commit boundary is the flush.** `commit()` returns only after the bytes
+have reached storage: `fsync` on POSIX, `FlushFileBuffers` on Windows. The publish
 boundary is separate and belongs to the caller: a committed entry is not visible
 to readers until the engine has applied it. Submission is not completion, and
 serialization is not durability.
 
 **Compaction cannot supersede uncommitted state.** It snapshots exactly the
 committed state, writes the snapshot through a temporary file with an atomic
-replace, creates the new journal segment, and only then replaces @CURRENT@. A
+replace, creates the new journal segment, and only then replaces `CURRENT`. A
 crash at any point leaves either the previous pair (still consistent) or the new
 pair; the orphan is removed on the next open and reported.
 
@@ -215,7 +215,7 @@ pair; the orphan is removed on the next open and reported.
   or which does not decode, is **interior corruption**. The store refuses to open
   and never truncates through it.
 
-An incomplete final record was never acknowledged, because @commit()@ does not
+An incomplete final record was never acknowledged, because `commit()` does not
 return until the record is complete and flushed. That is why removing it loses
 nothing that was promised. There is one honest limitation: a bit flip in a
 record's own length field can make a complete final record look incomplete, and
@@ -234,7 +234,7 @@ it, in submission order, so no lock protects authoritative state and no
 read-modify-write race is possible by construction.
 
 - Submitters place a command on a **bounded** queue and return; a submitter that
-  arrives when the bound is reached is refused with @capacity_exhausted@.
+  arrives when the bound is reached is refused with `capacity_exhausted`.
 - The mutator evaluates, makes the entry durable, applies it, and publishes an
   immutable snapshot.
 - Readers take a consistent copy of the published snapshot and never block the
@@ -269,13 +269,13 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Options: @DCF_BUILD_TOOLS@, @DCF_BUILD_TESTS@, @DCF_BUILD_BENCHMARKS@,
-@DCF_WARNINGS_AS_ERRORS@, @DCF_ENABLE_ASAN@, @DCF_ENABLE_UBSAN@.
+Options: `DCF_BUILD_TOOLS`, `DCF_BUILD_TESTS`, `DCF_BUILD_BENCHMARKS`,
+`DCF_WARNINGS_AS_ERRORS`, `DCF_ENABLE_ASAN`, `DCF_ENABLE_UBSAN`.
 
-First-party code is warning-free under MSVC @/W4 /WX /permissive-@ and under GCC
-and Clang with @-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
+First-party code is warning-free under MSVC `/W4 /WX /permissive-` and under GCC
+and Clang with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion
 -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wnull-dereference
--Wdouble-promotion -Wformat=2 -Werror@.
+-Wdouble-promotion -Wformat=2 -Werror`.
 
 There is **no test timeout anywhere** - not in CTest, not in the CI workflow, not
 in a wrapper. A test that never finishes is a defect to be diagnosed from
@@ -290,24 +290,24 @@ cmake --build consumer-build
 ./consumer-build/dcf-consumer /tmp/consumer-store
 ```
 
-The package is @DataCenterFederation@, the exported target is
-@DataCenterFederation::dcf@, and the transitive dependencies (@Threads::Threads@,
-and @ws2_32@ on Windows) are carried by the exported target and resolved by the
+The package is `DataCenterFederation`, the exported target is
+`DataCenterFederation::dcf`, and the transitive dependencies (`Threads::Threads`,
+and `ws2_32` on Windows) are carried by the exported target and resolved by the
 package config, so a consumer needs no platform-specific link flags of its own.
 
 ## The programs
 
-@dcf-federationd@ hosts one federation: it owns the durable store, the runtime,
+`dcf-federationd` hosts one federation: it owns the durable store, the runtime,
 and the protocol that sites and operators speak.
 
-@dcf-sited@ hosts one site. It owns its own local epoch and durable local state,
+`dcf-sited` hosts one site. It owns its own local epoch and durable local state,
 announces itself to a relay, registers, activates when told it has been admitted,
 reports what it has accepted, and keeps working while the link is down.
 
-@dcf-relay@ forwards bytes and can cut one site off. Its control port accepts
-@BLOCK <token>@, @ALLOW <token>@, @STATUS@ and @QUIT@.
+`dcf-relay` forwards bytes and can cut one site off. Its control port accepts
+`BLOCK <token>`, `ALLOW <token>`, `STATUS` and `QUIT`.
 
-@dcfctl@ is the operator tool.
+`dcfctl` is the operator tool.
 
 A complete session, using the ports a run actually printed:
 
@@ -392,12 +392,12 @@ Ninja 1.13.2 and CMake 4.3.2:
 
 | suite | cases | checks executed |
 | --- | --- | --- |
-| @unit_foundation@ | 21 | 118 |
-| @unit_engine@ | 24 | 82 |
-| @unit_store@ | 14 | 32 |
-| @unit_runtime@ | 8 | 30 |
-| @prop_adversarial@ | 6 | 16588 |
-| @cluster_partition@ | 6 | 51 |
+| `unit_foundation` | 21 | 118 |
+| `unit_engine` | 24 | 82 |
+| `unit_store` | 14 | 32 |
+| `unit_runtime` | 8 | 30 |
+| `prop_adversarial` | 6 | 16588 |
+| `cluster_partition` | 6 | 51 |
 | **total** | **79** | **16901** |
 
 All 79 cases and all 16901 checks pass in both configurations. Release on the
@@ -437,25 +437,25 @@ the code, and both are fixed here:
 
 What the suites actually do:
 
-- @unit_foundation@: identifiers, checked arithmetic, version windows, SHA-256
+- `unit_foundation`: identifiers, checked arithmetic, version windows, SHA-256
   against published vectors, CRC-32C against the published vector, UTF-8
   validation including overlong forms and surrogates, and the canonical codec's
   refusal of truncated, padded, oversized and non-canonical input.
-- @unit_engine@: the lifecycle, explainable compatibility refusal, staged windows,
+- `unit_engine`: the lifecycle, explainable compatibility refusal, staged windows,
   delegation and revocation, exclusive-authority conflicts, stale generation
   fencing, idempotent replay, partition suspension and restoration, removal
-  fencing, and every reconciliation outcome including @federation_regression@ and
-  @conflict_unresolved@.
-- @unit_store@: real close and reopen, a torn tail that is truncated and reported,
+  fencing, and every reconciliation outcome including `federation_regression` and
+  `conflict_unresolved`.
+- `unit_store`: real close and reopen, a torn tail that is truncated and reported,
   an all-zero tail, interior corruption that is refused and left untouched, a
   complete final record with a bad checksum, compaction, writes after compaction,
-  orphan removal, a missing snapshot, a damaged @CURRENT@, the exclusive lock,
+  orphan removal, a missing snapshot, a damaged `CURRENT`, the exclusive lock,
   reordered entries, and a truncated snapshot.
-- @unit_runtime@: concurrent submitters with concurrent readers, a callback that
+- `unit_runtime`: concurrent submitters with concurrent readers, a callback that
   resubmits, a callback that throws, a synchronous submission from a callback, a
   bounded queue that says so, shutdown that does not drop accepted work, close and
   reopen, and compaction.
-- @prop_adversarial@: 24 fixed seeds driving 60 random commands each, with the
+- `prop_adversarial`: 24 fixed seeds driving 60 random commands each, with the
   invariants checked after every single step (the generation never decreases, the
   sequence advances by one exactly when a record was written, the digest is a pure
   function of the state) and a full replay of the recorded entries from genesis
@@ -467,19 +467,19 @@ What the suites actually do:
   non-canonical booleans, invalid UTF-8, duplicate identities, a path traversal
   attempt in a capability name, a store path beyond the Windows path limit, and 25
   rounds of open and close.
-- @cluster_partition@: real operating-system processes over TCP - a federation, a
+- `cluster_partition`: real operating-system processes over TCP - a federation, a
   relay, a site, and the installed CLI - covering registration, compatibility
   validation, admission, activation, a partition made by the relay closing the
   path, local operations that succeed while the site is cut off, a real reconnect
   and reconciliation, removal during a partition with fencing on reconnect, a
   federation killed without warning and restarted on the same store with an
   identical authority digest, an exclusive delegation that cannot be double
-  granted across a partition, and the installed @dcfctl@ driving the federation.
+  granted across a partition, and the installed `dcfctl` driving the federation.
 
 ## Benchmarks
 
 Measured on Windows 11 x64, 16 hardware threads, Release build with MSVC 19.44,
-by @bench_federation@. Every figure is a measurement taken by the run that
+by `bench_federation`. Every figure is a measurement taken by the run that
 produced it; nothing is estimated. Durable operations are reported separately
 because they include a flush to storage and are not comparable with in-memory
 evaluation.
@@ -528,10 +528,10 @@ left for a reader to discover:
   may still not handle such a path.
 - Windows has no operation that flushes a directory entry. The atomic replace is
   the durability boundary for the name; the file contents are flushed before it.
-- GCC 14 at @-O3@ reports @-Wfree-nonheap-object@ inside libstdc++'s
-  @new_allocator.h@ for two translation units that use @std::variant@ and
-  @std::vector@ in the ordinary way. The diagnostic names a pointer it cannot
-  identify, disappears at @-O2@ and below, and points into a standard library
+- GCC 14 at `-O3` reports `-Wfree-nonheap-object` inside libstdc++'s
+  `new_allocator.h` for two translation units that use `std::variant` and
+  `std::vector` in the ordinary way. The diagnostic names a pointer it cannot
+  identify, disappears at `-O2` and below, and points into a standard library
   header. It is suppressed for exactly those two files and nothing else; the
   reasoning is written next to the suppression in the build file.
 - The multiprocess suite runs real processes over the loopback interface on one
