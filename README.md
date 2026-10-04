@@ -6,7 +6,7 @@ larger authority domain. It owns federation membership, federation generations,
 site delegation, compatibility admission, partition-safe federation state, and
 reconciliation after disconnection.
 
-It is one boundary in the Data Center Control Plane (DCCP). It is built to be
+It is built to be
 useful on its own and swappable: nothing here reaches into another runtime, and
 nothing here assumes that the site on the other end is the same implementation.
 
