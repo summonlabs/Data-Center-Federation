@@ -838,6 +838,19 @@ Result<FederationEngine::Plan> FederationEngine::evaluate(const Command& command
   plan.persists = !plan.entry.changes.empty() || plan.entry.receipt.has_value();
   if (!plan.persists) {
     plan.entry = JournalEntry{};
+    return plan;
+  }
+
+  // The state machine refuses an entry that would overfill a table, but it is
+  // only asked after the entry is durable. A full table therefore left an entry
+  // in the journal that the state never applied: every later command was refused
+  // for its sequence, and the store could not be replayed again. The command is
+  // refused here instead, before anything is written.
+  const auto room = state_.has_room_for(plan.entry, limits_);
+  if (!room) {
+    Plan refused;
+    refused.outcome = refuse(state_, room.error().code, room.error().detail);
+    return refused;
   }
   return plan;
 }

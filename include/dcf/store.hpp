@@ -73,6 +73,9 @@ class JournalStore {
   [[nodiscard]] const FederationState& recovered_state() const noexcept { return recovered_; }
   [[nodiscard]] std::uint64_t last_sequence() const noexcept { return last_sequence_; }
   [[nodiscard]] std::uint64_t durable_bytes() const noexcept;
+  // The largest journal segment recovery reads. commit() refuses to grow the
+  // segment past it; compact() starts a new segment.
+  [[nodiscard]] std::uint64_t segment_limit_bytes() const noexcept;
 
  private:
   [[nodiscard]] Result<Ack> load_current();

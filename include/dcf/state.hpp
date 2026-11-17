@@ -219,6 +219,11 @@ class FederationState {
   // state cannot differ from the state that was live.
   [[nodiscard]] Result<Ack> apply(const JournalEntry& entry, const Limits& limits);
 
+  // Whether every table has room for what `entry` would add. apply() refuses an
+  // entry that would overfill a table, and a journal that holds a refused entry
+  // cannot be replayed, so this is asked before an entry is made durable.
+  [[nodiscard]] Result<Ack> has_room_for(const JournalEntry& entry, const Limits& limits) const;
+
   [[nodiscard]] std::size_t site_count() const noexcept { return sites_.size(); }
   [[nodiscard]] std::size_t delegation_count() const noexcept { return delegations_.size(); }
 

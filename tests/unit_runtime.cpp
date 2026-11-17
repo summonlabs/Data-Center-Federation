@@ -358,3 +358,84 @@ DCF_TEST(runtime, compaction_keeps_the_state_and_moves_the_journal) {
   DCF_CHECK_EQ(store.recovered_state().authority_digest(), before);
   DCF_REQUIRE(store.close().has_value());
 }
+
+namespace {
+
+[[nodiscard]] Command window_revision(std::uint64_t revision) {
+  CompatibilityWindow window;
+  window.capability = CapabilityId{"dcf.membership"};
+  window.offered = VersionRange{Version{1, 0}, revision % 2 == 0 ? Version{3, 0} : Version{4, 0}};
+  window.effective_from = FederationGeneration{1};
+  Command command;
+  command.payload = DeclareWindowCommand{window};
+  return command;
+}
+
+}  // namespace
+
+DCF_TEST(runtime, a_command_the_state_has_no_room_for_is_refused_before_it_is_journaled) {
+  const std::string root = dcf::test::make_scratch_directory("runtime-no-room");
+  establish(root, FederationId{0x71ULL, 0x17ULL});
+  RuntimeOptions options = options_for(root, 16);
+  options.limits.max_receipts = 2;
+  std::uint64_t committed = 0;
+  {
+    auto opened = FederationRuntime::open(options, std::make_shared<ManualClock>(UnixMillis{2000}));
+    DCF_REQUIRE(opened.has_value());
+    std::unique_ptr<FederationRuntime> runtime = std::move(opened).value();
+    for (std::uint64_t index = 0; index < 2; ++index) {
+      Command command = window_revision(index);
+      command.operation = OperationId{0x8000ULL, index + 1};
+      const auto outcome = runtime->submit_sync(command);
+      DCF_REQUIRE(outcome.has_value());
+      DCF_CHECK_EQ(outcome.value().code, ErrorCode::None);
+    }
+
+    // The receipt table is full, so a third command that needs a receipt is
+    // refused...
+    Command overflow = window_revision(2);
+    overflow.operation = OperationId{0x8000ULL, 3};
+    const auto refused = runtime->submit_sync(overflow);
+    DCF_REQUIRE(refused.has_value());
+    DCF_CHECK_EQ(refused.value().code, ErrorCode::CapacityExhausted);
+
+    // ...and the refusal left the journal exactly where the state is: the next
+    // command is accepted, and the store opens again afterwards.
+    const auto next = runtime->submit_sync(window_revision(3));
+    DCF_REQUIRE(next.has_value());
+    DCF_CHECK_EQ(next.value().code, ErrorCode::None);
+    committed = runtime->last_sequence().value();
+    DCF_REQUIRE(runtime->shutdown().has_value());
+  }
+  auto reopened = FederationRuntime::open(options, std::make_shared<ManualClock>(UnixMillis{2000}));
+  DCF_REQUIRE(reopened.has_value());
+  DCF_CHECK_EQ(reopened.value()->last_sequence().value(), committed);
+  DCF_REQUIRE(reopened.value()->shutdown().has_value());
+}
+
+DCF_TEST(runtime, the_journal_is_compacted_before_it_reaches_what_recovery_refuses) {
+  const std::string root = dcf::test::make_scratch_directory("runtime-segment-bound");
+  establish(root, FederationId{0x72ULL, 0x27ULL});
+  // No compaction cadence is configured, which is the daemon's default. Recovery
+  // refuses a journal segment above 64 frames' worth of bytes.
+  RuntimeOptions options = options_for(root, 16);
+  options.limits.max_frame_bytes = 1024;
+  std::uint64_t committed = 0;
+  {
+    auto opened = FederationRuntime::open(options, std::make_shared<ManualClock>(UnixMillis{2000}));
+    DCF_REQUIRE(opened.has_value());
+    std::unique_ptr<FederationRuntime> runtime = std::move(opened).value();
+    for (std::uint64_t index = 0; index < 1200; ++index) {
+      const auto outcome = runtime->submit_sync(window_revision(index));
+      DCF_REQUIRE(outcome.has_value());
+      DCF_REQUIRE(outcome.value().code == ErrorCode::None);
+    }
+    DCF_CHECK(runtime->stats().compactions > 0);
+    committed = runtime->last_sequence().value();
+    DCF_REQUIRE(runtime->shutdown().has_value());
+  }
+  auto reopened = FederationRuntime::open(options, std::make_shared<ManualClock>(UnixMillis{2000}));
+  DCF_REQUIRE(reopened.has_value());
+  DCF_CHECK_EQ(reopened.value()->last_sequence().value(), committed);
+  DCF_REQUIRE(reopened.value()->shutdown().has_value());
+}

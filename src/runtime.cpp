@@ -330,6 +330,18 @@ void FederationRuntime::run() {
       }
     }
 
+    // The store refuses to grow a journal segment past what recovery reads, and
+    // with no compaction cadence configured nothing ever started a new segment.
+    // Half way to that limit the runtime compacts on its own.
+    if (store_->durable_bytes() >= store_->segment_limit_bytes() / 2) {
+      const auto compacted = store_->compact(engine_.state());
+      if (compacted) {
+        std::lock_guard<std::mutex> guard(stats_mutex_);
+        ++stats_.compactions;
+        entries_since_compaction_ = 0;
+      }
+    }
+
     if (options_.compact_every_entries > 0) {
       ++entries_since_compaction_;
       if (entries_since_compaction_ >= options_.compact_every_entries) {

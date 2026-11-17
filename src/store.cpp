@@ -158,6 +158,10 @@ std::uint64_t JournalStore::durable_bytes() const noexcept {
   return journal_.is_open() ? journal_.size() : 0;
 }
 
+std::uint64_t JournalStore::segment_limit_bytes() const noexcept {
+  return limits_.max_frame_bytes * 64ULL;
+}
+
 Result<JournalStore> JournalStore::open(const std::string& root, const Limits& limits) {
   if (root.empty()) {
     return make_error(ErrorCode::InvalidArgument, "a store root path is required");
@@ -430,7 +434,7 @@ Result<Ack> JournalStore::load_snapshot(const std::string& name) {
 
 Result<Ack> JournalStore::replay_journal(const std::string& name) {
   const std::string path = path_of(name);
-  const auto raw = platform::read_file(path, limits_.max_frame_bytes * 64ULL);
+  const auto raw = platform::read_file(path, segment_limit_bytes());
   if (!raw) {
     return raw.error();
   }
@@ -604,14 +608,39 @@ Result<Ack> JournalStore::commit(const JournalEntry& entry) {
   put_u32(frame, crc32c(payload));
   frame.insert(frame.end(), payload.begin(), payload.end());
 
+  // Recovery reads the segment whole and refuses one above the segment limit.
+  // Appending never checked that limit, so a store that was not compacted in
+  // time wrote a journal it could not open again.
+  const std::uint64_t durable_end = journal_.size();
+  if (durable_end + frame.size() > segment_limit_bytes()) {
+    return make_error(ErrorCode::BoundsExceeded,
+                      "the journal segment holds " + std::to_string(durable_end) +
+                          " bytes and this entry would take it past the " +
+                          std::to_string(segment_limit_bytes()) +
+                          " bytes recovery reads; compact the store");
+  }
+
+  // A failed append or flush may leave part of the record, or all of it, at the
+  // end of the segment. Left there, the next record was written after it and
+  // the segment no longer replayed. The segment is put back on its durable end,
+  // and a store that cannot do that refuses further commits.
+  const auto retire_partial = [this, durable_end]() {
+    const auto restored = journal_.truncate_to(durable_end);
+    if (!restored) {
+      open_ = false;
+    }
+  };
+
   const auto appended = journal_.append(frame);
   if (!appended) {
+    retire_partial();
     return appended.error();
   }
   // The durability boundary: nothing above this line is visible to anyone until
   // the bytes are on storage.
   const auto flushed = journal_.flush();
   if (!flushed) {
+    retire_partial();
     return flushed.error();
   }
   last_sequence_ = entry.sequence.value();

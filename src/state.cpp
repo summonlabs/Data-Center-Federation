@@ -329,7 +329,12 @@ Result<FederationState> FederationState::decode_from(Decoder& decoder, const Lim
     state.sites_.emplace(record.value().site, record.value());
   }
 
-  const auto delegation_count = decoder.collection_count();
+  // The delegation, reconciliation and receipt tables have their own bounds,
+  // which are larger than the generic bound on one decoded collection. Their
+  // counts are checked against those: checked against the generic bound first,
+  // a snapshot of a state the tables allowed was refused, and a store whose
+  // snapshot is refused does not open.
+  const auto delegation_count = decoder.u32();
   if (!delegation_count) {
     return delegation_count.error();
   }
@@ -359,7 +364,7 @@ Result<FederationState> FederationState::decode_from(Decoder& decoder, const Lim
     state.windows_.emplace(window.value().capability, window.value());
   }
 
-  const auto reconciliation_count = decoder.collection_count();
+  const auto reconciliation_count = decoder.u32();
   if (!reconciliation_count) {
     return reconciliation_count.error();
   }
@@ -377,7 +382,7 @@ Result<FederationState> FederationState::decode_from(Decoder& decoder, const Lim
     state.reconciliations_.emplace(record.value().id, record.value());
   }
 
-  const auto receipt_count = decoder.collection_count();
+  const auto receipt_count = decoder.u32();
   if (!receipt_count) {
     return receipt_count.error();
   }
@@ -460,6 +465,53 @@ Result<Ack> FederationState::apply(const JournalEntry& entry, const Limits& limi
 
   generation_ = entry.generation;
   sequence_ = entry.sequence;
+  return Ack{};
+}
+
+Result<Ack> FederationState::has_room_for(const JournalEntry& entry, const Limits& limits) const {
+  std::uint64_t new_sites = 0;
+  std::uint64_t new_delegations = 0;
+  std::uint64_t new_windows = 0;
+  std::uint64_t new_reconciliations = 0;
+  for (const MutationPayload& payload : entry.changes) {
+    if (const auto* site = std::get_if<SiteRegisteredMutation>(&payload)) {
+      new_sites += sites_.find(site->record.site) == sites_.end() ? 1U : 0U;
+    } else if (const auto* grant = std::get_if<DelegationGrantedMutation>(&payload)) {
+      new_delegations += delegations_.find(grant->grant.id) == delegations_.end() ? 1U : 0U;
+    } else if (const auto* window = std::get_if<CompatibilityWindowDeclaredMutation>(&payload)) {
+      new_windows += windows_.find(window->window.capability) == windows_.end() ? 1U : 0U;
+    } else if (const auto* record = std::get_if<ReconciliationRecordedMutation>(&payload)) {
+      new_reconciliations +=
+          reconciliations_.find(record->record.id) == reconciliations_.end() ? 1U : 0U;
+    }
+  }
+  const std::uint64_t new_receipts =
+      entry.receipt.has_value() && receipts_.find(entry.receipt->key) == receipts_.end() ? 1U : 0U;
+
+  const auto full = [](std::uint64_t held, std::uint64_t added, std::uint64_t maximum) {
+    return added != 0 && held + added > maximum;
+  };
+  const auto refusal = [](const char* table, std::uint64_t held, std::uint64_t maximum) {
+    return make_error(ErrorCode::CapacityExhausted,
+                      std::string("the ") + table + " table holds " + std::to_string(held) +
+                          " entries which is the configured maximum of " +
+                          std::to_string(maximum));
+  };
+  if (full(sites_.size(), new_sites, limits.max_sites)) {
+    return refusal("site", sites_.size(), limits.max_sites);
+  }
+  if (full(delegations_.size(), new_delegations, limits.max_delegations)) {
+    return refusal("delegation", delegations_.size(), limits.max_delegations);
+  }
+  if (full(windows_.size(), new_windows, limits.max_collection_items)) {
+    return refusal("window", windows_.size(), limits.max_collection_items);
+  }
+  if (full(reconciliations_.size(), new_reconciliations, limits.max_reconciliations)) {
+    return refusal("reconciliation", reconciliations_.size(), limits.max_reconciliations);
+  }
+  if (full(receipts_.size(), new_receipts, limits.max_receipts)) {
+    return refusal("receipt", receipts_.size(), limits.max_receipts);
+  }
   return Ack{};
 }
 

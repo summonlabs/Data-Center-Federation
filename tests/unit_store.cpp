@@ -426,3 +426,103 @@ DCF_TEST(store, a_truncated_snapshot_is_refused) {
   DCF_REQUIRE(!opened.has_value());
   DCF_CHECK_EQ(opened.error().code, ErrorCode::Corruption);
 }
+
+namespace {
+
+// Declares one compatibility window as the federation operator. Declaring the
+// same capability again replaces its window, so the command can be repeated.
+[[nodiscard]] Command window_revision(std::uint64_t revision) {
+  CompatibilityWindow window;
+  window.capability = CapabilityId{"dcf.membership"};
+  window.offered = VersionRange{Version{1, 0}, revision % 2 == 0 ? Version{3, 0} : Version{4, 0}};
+  window.effective_from = FederationGeneration{1};
+  Command command;
+  command.payload = DeclareWindowCommand{window};
+  return command;
+}
+
+}  // namespace
+
+DCF_TEST(store, a_snapshot_of_a_state_within_its_table_bounds_can_be_read_back) {
+  const std::string root = dcf::test::make_scratch_directory("store-table-bounds");
+  // The receipt table may hold more entries than the generic bound on one decoded
+  // collection, as it may with the default limits (1,000,000 against 200,000).
+  Limits limits;
+  limits.max_collection_items = 4;
+  limits.max_receipts = 64;
+  Digest expected;
+  {
+    auto opened = JournalStore::open(root, limits);
+    DCF_REQUIRE(opened.has_value());
+    JournalStore store = std::move(opened).value();
+    FederationEngine engine(limits, std::make_shared<ManualClock>(UnixMillis{1000}));
+    DCF_REQUIRE(engine.replay(genesis_entry(kFederation, UnixMillis{1000})).has_value());
+    DCF_REQUIRE(store.commit(genesis_entry(kFederation, UnixMillis{1000})).has_value());
+    for (std::uint64_t index = 0; index < 8; ++index) {
+      Command command = window_revision(index);
+      command.operation = OperationId{0x9000ULL, index + 1};
+      const auto plan = engine.evaluate(command);
+      DCF_REQUIRE(plan.has_value());
+      DCF_REQUIRE(plan.value().persists);
+      DCF_REQUIRE(store.commit(plan.value().entry).has_value());
+      DCF_REQUIRE(engine.commit(plan.value()).has_value());
+    }
+    DCF_CHECK_EQ(engine.state().receipts().size(), std::size_t{8});
+    DCF_REQUIRE(store.compact(engine.state()).has_value());
+    expected = engine.state().canonical_digest();
+    DCF_REQUIRE(store.close().has_value());
+  }
+  auto reopened = JournalStore::open(root, limits);
+  DCF_REQUIRE(reopened.has_value());
+  JournalStore store = std::move(reopened).value();
+  DCF_CHECK_EQ(store.recovered_state().canonical_digest(), expected);
+  DCF_REQUIRE(store.close().has_value());
+}
+
+DCF_TEST(store, a_journal_segment_never_outgrows_what_recovery_reads) {
+  const std::string root = dcf::test::make_scratch_directory("store-segment-bound");
+  // Recovery reads one journal segment whole and refuses one above 64 frames'
+  // worth of bytes. Appending has to stop at the same bound.
+  Limits limits;
+  limits.max_frame_bytes = 1024;
+  const std::uint64_t segment_bound = limits.max_frame_bytes * 64ULL;
+  std::uint64_t committed = 0;
+  {
+    auto opened = JournalStore::open(root, limits);
+    DCF_REQUIRE(opened.has_value());
+    JournalStore store = std::move(opened).value();
+    FederationEngine engine(limits, std::make_shared<ManualClock>(UnixMillis{1000}));
+    DCF_REQUIRE(engine.replay(genesis_entry(kFederation, UnixMillis{1000})).has_value());
+    DCF_REQUIRE(store.commit(genesis_entry(kFederation, UnixMillis{1000})).has_value());
+    bool refused = false;
+    for (std::uint64_t index = 0; index < 2000 && !refused; ++index) {
+      const auto plan = engine.evaluate(window_revision(index));
+      DCF_REQUIRE(plan.has_value());
+      DCF_REQUIRE(plan.value().persists);
+      const auto durable = store.commit(plan.value().entry);
+      if (!durable) {
+        DCF_CHECK_EQ(durable.error().code, ErrorCode::BoundsExceeded);
+        refused = true;
+        break;
+      }
+      DCF_REQUIRE(engine.commit(plan.value()).has_value());
+      ++committed;
+    }
+    DCF_CHECK(refused);
+    DCF_CHECK(store.durable_bytes() <= segment_bound);
+
+    // A compaction rotates the segment, and appending continues.
+    DCF_REQUIRE(store.compact(engine.state()).has_value());
+    const auto plan = engine.evaluate(window_revision(committed));
+    DCF_REQUIRE(plan.has_value());
+    DCF_REQUIRE(store.commit(plan.value().entry).has_value());
+    DCF_REQUIRE(engine.commit(plan.value()).has_value());
+    DCF_REQUIRE(store.close().has_value());
+  }
+  auto reopened = JournalStore::open(root, limits);
+  DCF_REQUIRE(reopened.has_value());
+  JournalStore store = std::move(reopened).value();
+  // Genesis, every accepted declaration, and the one after the compaction.
+  DCF_CHECK_EQ(store.last_sequence(), committed + 2);
+  DCF_REQUIRE(store.close().has_value());
+}
